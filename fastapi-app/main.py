@@ -19,6 +19,7 @@ class TodoIn(BaseModel):                         # 클라이언트가 보내는 
     title: str = Field(min_length=1, max_length=100)
     description: str = ""
     completed: bool = False
+    due_date: str = ""                           # [추가] 마감일 "YYYY-MM-DD", 없으면 빈 문자열
 
 
 class TodoItem(TodoIn):                          # 서버가 돌려주는 데이터 (id 있음)
