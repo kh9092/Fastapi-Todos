@@ -1,9 +1,12 @@
 import json
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+VERSION = "v3.0.0"
 
 BASE_DIR = Path(__file__).resolve().parent       # main.py 가 있는 폴더
 TODO_FILE = BASE_DIR / "todo.json"
@@ -12,14 +15,15 @@ INDEX_FILE = BASE_DIR / "templates" / "index.html"
 if not TODO_FILE.exists():                       # 없으면 빈 목록으로 만들어 둔다
     TODO_FILE.write_text("[]", encoding="utf-8")
 
-app = FastAPI(title="To-Do List API")
+app = FastAPI(title="To-Do List API", version=VERSION)
 
 
 class TodoIn(BaseModel):                         # 클라이언트가 보내는 데이터 (id 없음)
     title: str = Field(min_length=1, max_length=100)
     description: str = ""
     completed: bool = False
-    due_date: str = ""                           # [추가] 마감일 "YYYY-MM-DD", 없으면 빈 문자열
+    due_date: str = ""                           # 마감일 "YYYY-MM-DD", 없으면 빈 문자열
+    priority: Literal["high", "normal", "low"] = "normal"   # [추가] 우선순위
 
 
 class TodoItem(TodoIn):                          # 서버가 돌려주는 데이터 (id 있음)
@@ -71,6 +75,11 @@ def delete_todo(todo_id: int) -> None:
     todos = load_todos()
     del todos[find_index(todos, todo_id)]
     save_todos(todos)
+
+
+@app.get("/version", include_in_schema=False)    # [추가] 화면 하단 버전 표시용
+def get_version() -> dict:
+    return {"version": VERSION}
 
 
 @app.get("/", include_in_schema=False)           # 화면 서빙

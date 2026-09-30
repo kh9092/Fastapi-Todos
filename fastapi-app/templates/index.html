@@ -5,14 +5,24 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>To-Do List</title>
     <style>
-        body { font-family: system-ui, sans-serif; max-width: 640px; margin: 2rem auto; padding: 0 1rem; }
+        body { font-family: system-ui, sans-serif; max-width: 680px; margin: 2rem auto; padding: 0 1rem; }
         form { display: flex; gap: .5rem; flex-wrap: wrap; margin-bottom: .75rem; }
         input[type="text"] { flex: 1 1 10rem; padding: .5rem; }
-        input[type="date"] { padding: .5rem; }
+        input[type="date"], select { padding: .5rem; }
         ul { list-style: none; padding: 0; }
-        li { display: flex; align-items: center; gap: .5rem; padding: .4rem 0; border-bottom: 1px solid #e5e5e5; }
+        li { display: flex; align-items: center; gap: .5rem; padding: .4rem .5rem; border-bottom: 1px solid #e5e5e5;
+             border-left: 6px solid #f59e0b; }
+        li.p-high   { border-left-color: #dc2626; background: #fef2f2; }
+        li.p-normal { border-left-color: #f59e0b; background: #fffbeb; }
+        li.p-low    { border-left-color: #16a34a; background: #f0fdf4; }
+        li.is-done  { border-left-color: #9ca3af; background: #f5f5f5; }
         li .text { flex: 1; }
         .done { text-decoration: line-through; color: #888; }
+        .badge { font-size: .75rem; font-weight: 600; padding: .1rem .5rem; border-radius: 999px; color: #fff; white-space: nowrap; }
+        .badge.high   { background: #dc2626; }
+        .badge.normal { background: #f59e0b; }
+        .badge.low    { background: #16a34a; }
+        .badge.done   { background: #9ca3af; }
         .due { font-size: .85rem; color: #666; white-space: nowrap; }
         .overdue { color: #b00020; font-weight: 600; }
         #error { color: #b00020; }
@@ -22,6 +32,13 @@
         .filter.active { background: #333; color: #fff; }
         #count { color: #666; font-size: .9rem; margin-left: auto; }
         #empty { color: #888; padding: 1rem 0; }
+        #legend { display: flex; gap: .75rem; font-size: .85rem; color: #555; margin-bottom: .5rem; }
+        #legend span::before { content: ""; display: inline-block; width: .75rem; height: .75rem; margin-right: .3rem;
+                               border-radius: 2px; vertical-align: middle; }
+        #legend .l-high::before   { background: #dc2626; }
+        #legend .l-normal::before { background: #f59e0b; }
+        #legend .l-low::before    { background: #16a34a; }
+        #version { margin-top: 2rem; color: #999; font-size: .8rem; text-align: right; }
     </style>
 </head>
 <body>
@@ -29,6 +46,11 @@
     <form id="todo-form">
         <input type="text" id="title" placeholder="제목 (예: 20231234)" required>
         <input type="text" id="description" placeholder="설명 (예: 홍길동)">
+        <select id="priority" title="우선순위">
+            <option value="high">높음</option>
+            <option value="normal" selected>보통</option>
+            <option value="low">낮음</option>
+        </select>
         <input type="date" id="due-date" title="마감일 (선택)">
         <button type="submit">Add To-Do</button>
     </form>
@@ -41,13 +63,23 @@
         <span id="count"></span>
     </div>
 
+    <div id="legend">
+        <span class="l-high">높음</span>
+        <span class="l-normal">보통</span>
+        <span class="l-low">낮음</span>
+    </div>
+
     <p id="error" role="alert" hidden></p>
     <ul id="todo-list"></ul>
     <p id="empty" hidden>표시할 항목이 없습니다.</p>
+    <p id="version"></p>
 
     <script>
         const $ = (id) => document.getElementById(id);
         const listEl = $("todo-list"), errorEl = $("error"), emptyEl = $("empty"), countEl = $("count");
+
+        const PRIORITY_LABEL = { high: "높음", normal: "보통", low: "낮음" };
+        const PRIORITY_ORDER = { high: 0, normal: 1, low: 2 };
 
         let todos = [];            // 서버에서 받아온 전체 목록
         let filter = "all";        // all | active | done
@@ -82,13 +114,14 @@
           return Object.assign(document.createElement("button"), { textContent: label, onclick });
         }
 
-        // 필터 + 검색을 적용하고, 미완료를 위로 · 마감일 빠른 순으로 정렬한다
+        // 필터 + 검색 적용 후: 미완료 먼저 → 우선순위 높은 순 → 마감일 빠른 순
         function visibleTodos() {
           const noDate = "9999-99-99";
           return todos
             .filter((t) => filter === "all" || (filter === "done") === t.completed)
             .filter((t) => `${t.title} ${t.description}`.toLowerCase().includes(keyword))
             .sort((a, b) => (a.completed - b.completed)
+              || (PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority])
               || (a.due_date || noDate).localeCompare(b.due_date || noDate));
         }
 
@@ -108,8 +141,14 @@
               textContent: `${todo.title} — ${todo.description}`,
               className: todo.completed ? "text done" : "text",
             });
+            const badge = Object.assign(document.createElement("span"), {
+              textContent: todo.completed ? "완료" : PRIORITY_LABEL[todo.priority],
+              className: `badge ${todo.completed ? "done" : todo.priority}`,
+            });
+
             const li = document.createElement("li");
-            li.append(check, text);
+            li.className = todo.completed ? "is-done" : `p-${todo.priority}`;
+            li.append(check, badge, text);
 
             if (todo.due_date) {                       // 마감일이 있으면 표시하고, 지났으면 빨갛게
               const overdue = !todo.completed && todo.due_date < today();
@@ -131,7 +170,12 @@
           if (description === null) return;
           const due_date = prompt("마감일 (YYYY-MM-DD, 없으면 비워두세요):", todo.due_date);
           if (due_date === null) return;
-          save(todo.id, { ...todo, title: title.trim(), description: description.trim(), due_date: due_date.trim() });
+          const pr = prompt("우선순위 (1=높음, 2=보통, 3=낮음):",
+            { high: "1", normal: "2", low: "3" }[todo.priority]);
+          if (pr === null) return;
+          const priority = { "1": "high", "2": "normal", "3": "low" }[pr.trim()] || todo.priority;
+          save(todo.id, { ...todo, title: title.trim(), description: description.trim(),
+                          due_date: due_date.trim(), priority });
         }
 
         function remove(id) {
@@ -146,6 +190,7 @@
               title: $("title").value.trim(),
               description: $("description").value.trim(),
               due_date: $("due-date").value,
+              priority: $("priority").value,
             });
             event.target.reset();
             await load();
@@ -161,6 +206,8 @@
             render();
           };
         });
+
+        fetch("/version").then((r) => r.json()).then((v) => { $("version").textContent = v.version; }).catch(() => {});
 
         load();
     </script>
