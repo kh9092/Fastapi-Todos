@@ -19,8 +19,8 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 # 소스 복사 (앱이 todo.json을 수정할 수 있도록 소유자를 appuser로 지정)
-COPY --chown=appuser:appuser main.py .
-COPY --chown=appuser:appuser templates ./templates
+COPY main.py .
+COPY templates ./templates
 
 # 이후 명령은 appuser 권한으로 실행
 USER appuser
