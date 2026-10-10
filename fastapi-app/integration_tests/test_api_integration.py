@@ -4,6 +4,8 @@
     BASE_URL=http://163.239.77.77:5053 python -m pytest integration_tests -v
 
 BASE_URL 을 지정하지 않으면 로컬(http://localhost:8000)을 대상으로 한다.
+서버에 접근 키(TODO_API_KEY)를 설정했다면 API_KEY 환경변수에 같은 값을 넣어 실행한다:
+    API_KEY=키 BASE_URL=http://163.239.77.77:5053 python -m pytest integration_tests -v
 requests 같은 추가 패키지 없이 파이썬 표준 라이브러리(urllib)만 사용한다.
 """
 import json
@@ -16,15 +18,16 @@ import uuid
 import pytest
 
 BASE_URL = os.environ.get("BASE_URL", "http://localhost:8000").rstrip("/")
+API_KEY = os.environ.get("API_KEY", "")
 
 
 def call(method, path, body=None):
     """서버에 요청을 보내고 (상태코드, 응답 JSON) 을 돌려준다. 4xx/5xx 도 예외 없이 돌려준다."""
     data = json.dumps(body).encode("utf-8") if body is not None else None
-    req = urllib.request.Request(
-        BASE_URL + path, data=data, method=method,
-        headers={"Content-Type": "application/json"},
-    )
+    headers = {"Content-Type": "application/json"}
+    if API_KEY:
+        headers["X-API-Key"] = API_KEY
+    req = urllib.request.Request(BASE_URL + path, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as res:
             raw = res.read()
@@ -47,6 +50,8 @@ def wait_for_server():
             status, _ = call("GET", "/todos")
             if status == 200:
                 return
+            if status == 401:               # 기다려도 해결되지 않으니 바로 이유를 알려준다
+                pytest.fail("서버가 접근 키를 요구합니다. API_KEY 환경변수에 서버의 TODO_API_KEY 와 같은 값을 넣어 실행하세요.")
         except Exception as e:          # 연결 거부, 타임아웃 등
             last_error = e
         time.sleep(2)
@@ -107,3 +112,33 @@ def test_delete_nonexistent_returns_404():
     """없는 id 를 삭제하면 404"""
     status, _ = call("DELETE", "/todos/999999999")
     assert status == 404
+
+
+# ---------- v5.0.0: 배포 환경의 보안 설정 확인 ----------
+
+def get_headers(path):
+    """응답 헤더만 확인한다 (키 없이 접근 가능한 경로에서만 사용)."""
+    with urllib.request.urlopen(BASE_URL + path, timeout=10) as res:
+        return res.status, {k.lower(): v for k, v in res.headers.items()}
+
+
+def test_health_endpoint():
+    """/health 는 인증 없이 응답하고, 데이터는 담지 않는다"""
+    status, _ = get_headers("/health")
+    assert status == 200
+
+
+def test_security_headers_present():
+    """배포된 서버가 보안 헤더를 붙이는지 확인한다"""
+    status, headers = get_headers("/")
+    assert status == 200
+    assert headers["x-content-type-options"] == "nosniff"
+    assert headers["x-frame-options"] == "DENY"
+    assert "script-src 'self'" in headers["content-security-policy"]
+
+
+def test_api_docs_not_exposed():
+    """운영에서는 /docs 가 열려 있지 않아야 한다 (404)"""
+    with pytest.raises(urllib.error.HTTPError) as err:
+        get_headers("/docs")
+    assert err.value.code == 404
