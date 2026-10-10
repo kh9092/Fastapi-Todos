@@ -16,6 +16,7 @@ if not TODO_FILE.exists():                       # 없으면 빈 목록으로 �
     TODO_FILE.write_text("[]", encoding="utf-8")
 
 app = FastAPI(title="To-Do List API", version=VERSION)
+NOT_FOUND = {404: {"description": "To-Do item not found"}}
 
 
 class TodoIn(BaseModel):                         # 클라이언트가 보내는 데이터 (id 없음)
@@ -61,7 +62,7 @@ def create_todo(payload: TodoIn) -> TodoItem:
     return todo
 
 
-@app.put("/todos/{todo_id}")                     # 수정
+@app.put("/todos/{todo_id}", responses=NOT_FOUND)               # 수정
 def update_todo(todo_id: int, payload: TodoIn) -> TodoItem:
     todos = load_todos()
     todo = TodoItem(id=todo_id, **payload.model_dump())
@@ -70,7 +71,7 @@ def update_todo(todo_id: int, payload: TodoIn) -> TodoItem:
     return todo
 
 
-@app.delete("/todos/{todo_id}", status_code=204)  # 삭제
+@app.delete("/todos/{todo_id}", status_code=204, responses=NOT_FOUND) # 삭제
 def delete_todo(todo_id: int) -> None:
     todos = load_todos()
     del todos[find_index(todos, todo_id)]
