@@ -46,20 +46,24 @@ app = FastAPI(
 )
  
 # 오류 응답을 API 문서에 명시한다 (HTTPException 이 던지는 상태 코드).
-# 정적 분석 도구가 읽을 수 있도록 ** 병합 없이 경로별로 리터럴 딕셔너리를 따로 둔다.
+# 정적 분석 도구가 읽을 수 있도록 ** 병합 없이 경로별로 리터럴 딕셔너리를 따로 두고,
+# 여러 번 쓰이는 설명 문구는 상수로 한 번만 적는다.
+DESC_UNAUTHORIZED = "API 키가 없거나 올바르지 않음"
+DESC_STORE_ERROR = "저장된 데이터를 읽을 수 없음"
+ 
 RESPONSES_READ = {
-    401: {"description": "API 키가 없거나 올바르지 않음"},
-    500: {"description": "저장된 데이터를 읽을 수 없음"},
+    401: {"description": DESC_UNAUTHORIZED},
+    500: {"description": DESC_STORE_ERROR},
 }
 RESPONSES_CREATE = {
-    401: {"description": "API 키가 없거나 올바르지 않음"},
+    401: {"description": DESC_UNAUTHORIZED},
     409: {"description": "할 일 개수 한도 초과"},
-    500: {"description": "저장된 데이터를 읽을 수 없음"},
+    500: {"description": DESC_STORE_ERROR},
 }
 RESPONSES_CHANGE = {
-    401: {"description": "API 키가 없거나 올바르지 않음"},
+    401: {"description": DESC_UNAUTHORIZED},
     404: {"description": "To-Do item not found"},
-    500: {"description": "저장된 데이터를 읽을 수 없음"},
+    500: {"description": DESC_STORE_ERROR},
 }
  
  
