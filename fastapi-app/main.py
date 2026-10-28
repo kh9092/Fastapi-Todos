@@ -10,6 +10,7 @@ from typing import Annotated, Literal
  
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
+from prometheus_fastapi_instrumentator import Instrumentator  # ← 추가
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
  
@@ -44,6 +45,9 @@ app = FastAPI(
     redoc_url="/redoc" if DOCS_ON else None,
     openapi_url="/openapi.json" if DOCS_ON else None,
 )
+
+# ← 추가: Prometheus 메트릭 엔드포인트(/metrics). 요청 수·응답 시간 등을 자동으로 수집
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
  
 # 오류 응답을 API 문서에 명시한다 (HTTPException 이 던지는 상태 코드).
 # 정적 분석 도구가 읽을 수 있도록 ** 병합 없이 경로별로 리터럴 딕셔너리를 따로 두고,
