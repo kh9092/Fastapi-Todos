@@ -1,0 +1,14 @@
+# Grafana 가 시작할 때, 그리고 30초마다 /var/lib/grafana/dashboards 폴더의 JSON 을 대시보드로 읽어 들인다.
+# 서버를 새로 만들어도 이 파일들만 있으면 같은 대시보드가 다시 생긴다 (대시보드를 코드로 관리).
+apiVersion: 1
+
+providers:
+  - name: todo-app
+    orgId: 1
+    folder: To-Do                 # Grafana 의 To-Do 폴더 안에 만들어진다
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true          # 화면에서 고쳐도 되지만, 재시작하면 파일 내용으로 돌아간다
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards

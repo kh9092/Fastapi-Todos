@@ -1,0 +1,62 @@
+# 알림 규칙: Prometheus 가 15초마다 이 조건을 계산하고, 조건이 'for' 시간 동안 계속되면 알림(firing)이 된다.
+# 알림은 Prometheus 화면의 Alerts 탭과 Grafana 대시보드의 ALERTS 지표에서 볼 수 있다.
+# (Alertmanager 를 붙이지 않아서 메일·메신저 발송은 하지 않는다.)
+groups:
+  - name: todo-app
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "수집 대상 {{ $labels.job }} ({{ $labels.instance }}) 가 1분 넘게 응답하지 않음"
+
+      - alert: TodoStoreUnreadable
+        expr: todo_store_readable == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "todo.json 을 읽을 수 없음 (파일 손상 또는 형식 오류). 앱 로그의 todo.json 오류를 확인"
+
+      - alert: HighErrorRate
+        # 5xx(서버 오류) 비율. 요청이 없으면 0/0 = NaN 이라 알림이 울리지 않는다.
+        expr: sum(rate(http_requests_total{status="5xx"}[5m])) / sum(rate(http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "서버 오류(5xx) 비율이 5% 를 넘음"
+
+      - alert: HighLatencyP95
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_highr_seconds_bucket[5m]))) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "응답 시간 95번째 백분위가 1초를 넘음"
+
+      - alert: AuthFailureBurst
+        # 5분 동안 인증 실패가 20번을 넘으면 키를 추측하려는 시도일 수 있다.
+        expr: increase(todo_auth_failures_total[5m]) > 20
+        labels:
+          severity: warning
+        annotations:
+          summary: "최근 5분간 API 키 인증 실패가 20번을 넘음"
+
+      - alert: TodoCapacityNearLimit
+        expr: todo_capacity_ratio > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "할 일 개수가 상한의 90% 를 넘음"
+
+      - alert: TodoOverdueBacklog
+        expr: todo_items{state="overdue"} > 10
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "기한이 지난 미완료 항목이 10개를 넘음"

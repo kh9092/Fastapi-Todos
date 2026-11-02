@@ -142,3 +142,13 @@ def test_api_docs_not_exposed():
     with pytest.raises(urllib.error.HTTPError) as err:
         get_headers("/docs")
     assert err.value.code == 404
+
+
+# ---------- v6.0.0: 배포 환경의 업무 지표 확인 ----------
+
+def test_business_metrics_exposed():
+    """배포된 서버가 앱 고유의 상태 지표를 내보내고, 저장소가 정상(1)인지 확인한다"""
+    with urllib.request.urlopen(BASE_URL + "/metrics", timeout=10) as res:
+        body = res.read().decode("utf-8")
+    assert "todo_store_readable 1.0" in body
+    assert "todo_items{" in body

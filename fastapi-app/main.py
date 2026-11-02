@@ -10,11 +10,14 @@ from typing import Annotated, Literal
  
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse
+from prometheus_client import REGISTRY, Counter, Info
+from prometheus_client.core import GaugeMetricFamily
+from prometheus_client.registry import Collector
 from prometheus_fastapi_instrumentator import Instrumentator  # ← 추가
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
  
-VERSION = "v5.0.0"
+VERSION = "v6.0.0"
 MAX_TODOS = 500                                  # [A04] 항목 수 상한: 무제한으로 쌓여 파일이 커지는 것을 막는다
 DATE_FORMAT = re.compile(r"\d{4}-\d{2}-\d{2}")   # fromisoformat 은 "20261231" 같은 다른 형식도 받아서 먼저 거른다
  
@@ -48,6 +51,14 @@ app = FastAPI(
 
 # ← 추가: Prometheus 메트릭 엔드포인트(/metrics). 요청 수·응답 시간 등을 자동으로 수집
 Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
+
+# [v6 관측] 업무 지표: 요청 수 같은 일반 지표와 달리 "무슨 일이 몇 번 있었는지"를 앱이 직접 센다.
+OPERATIONS = Counter("todo_operations", "성공한 변경 작업 수", ["operation"])
+AUTH_FAILURES = Counter("todo_auth_failures", "API 키 인증 실패 수")
+LIMIT_REJECTIONS = Counter("todo_limit_rejections", "항목 수 상한 때문에 거절한 추가 요청 수")
+for _operation in ("create", "update", "delete"):
+    OPERATIONS.labels(_operation)    # 처음부터 값 0 으로 존재시킨다: 첫 요청부터 rate() 에 잡힌다
+Info("todo_build", "빌드 정보").info({"version": VERSION})
  
 # 오류 응답을 API 문서에 명시한다 (HTTPException 이 던지는 상태 코드).
 # 정적 분석 도구가 읽을 수 있도록 ** 병합 없이 경로별로 리터럴 딕셔너리를 따로 두고,
@@ -82,6 +93,7 @@ def require_api_key(request: Request, x_api_key: Annotated[str | None, Header()]
     if not expected:
         return
     if x_api_key is None or not hmac.compare_digest(x_api_key.encode(), expected.encode()):
+        AUTH_FAILURES.inc()
         logger.warning("auth failed | method=%s | ip=%s", request.method, client_ip(request))
         raise HTTPException(401, "유효한 API 키가 필요합니다", headers={"WWW-Authenticate": "ApiKey"})
  
@@ -113,10 +125,14 @@ class TodoItem(TodoIn):                          # 서버가 돌려주는 데이
     id: int
  
  
+def read_todos() -> list[TodoItem]:
+    raw = TODO_FILE.read_text(encoding="utf-8") if TODO_FILE.exists() else "[]"
+    return [TodoItem(**t) for t in json.loads(raw)]
+
+
 def load_todos() -> list[TodoItem]:
     try:
-        raw = TODO_FILE.read_text(encoding="utf-8") if TODO_FILE.exists() else "[]"
-        return [TodoItem(**t) for t in json.loads(raw)]
+        return read_todos()
     except (ValueError, TypeError) as exc:       # JSON 손상, 형식 불일치 (둘 다 ValueError 계열)
         logger.exception("todo.json 을 읽지 못했습니다")      # [A09] 원인을 기록한다
         raise HTTPException(500, "저장된 데이터를 읽을 수 없습니다") from exc
@@ -134,8 +150,50 @@ def find_index(todos: list[TodoItem], todo_id: int) -> int:
         if todo.id == todo_id:
             return i
     raise HTTPException(404, "To-Do item not found")
- 
- 
+
+
+class TodoCollector(Collector):
+    """[v6 관측] Prometheus 가 수집(scrape)할 때마다 저장소를 읽어 할 일의 현재 상태를 지표로 내보낸다.
+    값을 따로 갱신하지 않아서 실제 데이터와 어긋날 일이 없다."""
+
+    def collect(self):
+        readable = GaugeMetricFamily("todo_store_readable", "저장 파일을 읽을 수 있으면 1, 손상됐으면 0")
+        try:
+            todos = read_todos()
+        except (ValueError, TypeError, OSError):
+            readable.add_metric([], 0)           # 손상돼도 /metrics 는 응답해야 알림이 울린다
+            yield readable
+            return
+
+        today = date.today().isoformat()
+        states = {"active": 0, "overdue": 0, "completed": 0}
+        open_by_priority = {"high": 0, "normal": 0, "low": 0}
+        for todo in todos:
+            if todo.completed:
+                states["completed"] += 1
+                continue
+            open_by_priority[todo.priority] += 1
+            is_overdue = bool(todo.due_date) and todo.due_date < today
+            states["overdue" if is_overdue else "active"] += 1
+
+        readable.add_metric([], 1)
+        items = GaugeMetricFamily("todo_items", "상태별 할 일 개수", labels=["state"])
+        for state, count in states.items():
+            items.add_metric([state], count)
+        priorities = GaugeMetricFamily("todo_open_items", "우선순위별 미완료 할 일 개수", labels=["priority"])
+        for priority, count in open_by_priority.items():
+            priorities.add_metric([priority], count)
+        capacity = GaugeMetricFamily("todo_capacity_ratio", "할 일 개수 / 상한(MAX_TODOS)")
+        capacity.add_metric([], len(todos) / MAX_TODOS)
+        yield readable
+        yield items
+        yield priorities
+        yield capacity
+
+
+REGISTRY.register(TodoCollector())
+
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -161,10 +219,12 @@ def create_todo(payload: TodoIn, request: Request) -> TodoItem:
     with _lock:
         todos = load_todos()
         if len(todos) >= MAX_TODOS:
+            LIMIT_REJECTIONS.inc()
             raise HTTPException(409, f"할 일은 최대 {MAX_TODOS}개까지 만들 수 있습니다")
         new_id = max((t.id for t in todos), default=0) + 1
         todo = TodoItem(id=new_id, **payload.model_dump())
         save_todos([*todos, todo])
+    OPERATIONS.labels("create").inc()
     logger.info("create | id=%s | ip=%s", todo.id, client_ip(request))     # [A09] 제목은 기록하지 않는다
     return todo
  
@@ -178,6 +238,7 @@ def update_todo(todo_id: int, payload: TodoIn, request: Request) -> TodoItem:
         todo = TodoItem(id=todo_id, **payload.model_dump())
         todos[index] = todo
         save_todos(todos)
+    OPERATIONS.labels("update").inc()
     logger.info("update | id=%s | ip=%s", todo_id, client_ip(request))
     return todo
  
@@ -189,6 +250,7 @@ def delete_todo(todo_id: int, request: Request) -> None:
         todos = load_todos()
         del todos[find_index(todos, todo_id)]
         save_todos(todos)
+    OPERATIONS.labels("delete").inc()
     logger.info("delete | id=%s | ip=%s", todo_id, client_ip(request))
  
  

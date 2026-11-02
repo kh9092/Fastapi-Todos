@@ -1,0 +1,163 @@
+# 알림 규칙 단위 테스트: 가짜 지표를 넣고 "이 시각에 알림이 울린다 / 울리지 않는다"를 검사한다.
+# 실행: promtool test rules prometheus/alerts_test.yml   (alerts.yml 과 같은 폴더에서 실행)
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 15s
+
+tests:
+  # 수집 대상이 죽으면 1분 뒤 알림
+  - interval: 15s
+    input_series:
+      - series: 'up{job="fastapi", instance="fastapi-app:8000"}'
+        values: '1 1 1 0 0 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: TargetDown
+        exp_alerts: []
+      - eval_time: 2m30s
+        alertname: TargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: fastapi
+              instance: "fastapi-app:8000"
+            exp_annotations:
+              summary: "수집 대상 fastapi (fastapi-app:8000) 가 1분 넘게 응답하지 않음"
+
+  # 저장 파일이 손상되면 1분 뒤 알림, 정상일 때는 조용
+  - interval: 15s
+    input_series:
+      - series: 'todo_store_readable{job="fastapi", instance="fastapi-app:8000"}'
+        values: '1 1 1 1 0 0 0 0 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 45s
+        alertname: TodoStoreUnreadable
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: TodoStoreUnreadable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: fastapi
+              instance: "fastapi-app:8000"
+            exp_annotations:
+              summary: "todo.json 을 읽을 수 없음 (파일 손상 또는 형식 오류). 앱 로그의 todo.json 오류를 확인"
+
+  # 5xx 비율이 10% 이면 알림, 오류가 없으면 조용
+  - interval: 15s
+    input_series:
+      - series: 'http_requests_total{handler="/todos", method="GET", status="2xx"}'
+        values: '0+9x60'
+      - series: 'http_requests_total{handler="/todos", method="GET", status="5xx"}'
+        values: '0+1x60'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "서버 오류(5xx) 비율이 5% 를 넘음"
+
+  - interval: 15s
+    input_series:
+      - series: 'http_requests_total{handler="/todos", method="GET", status="2xx"}'
+        values: '0+9x60'
+      - series: 'http_requests_total{handler="/todos", method="GET", status="4xx"}'
+        values: '0+5x60'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HighErrorRate
+        exp_alerts: []        # 4xx(잘못된 요청)는 서버 오류가 아니라서 이 알림 대상이 아니다
+
+  # 인증 실패가 5분에 20번을 넘으면 알림 (for 없음: 바로)
+  - interval: 15s
+    input_series:
+      - series: 'todo_auth_failures_total{job="fastapi", instance="fastapi-app:8000"}'
+        values: '0+3x40'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AuthFailureBurst
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: fastapi
+              instance: "fastapi-app:8000"
+            exp_annotations:
+              summary: "최근 5분간 API 키 인증 실패가 20번을 넘음"
+
+  # 할 일 개수가 상한의 95% 이면 5분 뒤 알림
+  - interval: 15s
+    input_series:
+      - series: 'todo_capacity_ratio{job="fastapi", instance="fastapi-app:8000"}'
+        values: '0.95x40'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: TodoCapacityNearLimit
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: TodoCapacityNearLimit
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              job: fastapi
+              instance: "fastapi-app:8000"
+            exp_annotations:
+              summary: "할 일 개수가 상한의 90% 를 넘음"
+
+  # 기한 지난 항목이 12개이면 10분 뒤 알림
+  - interval: 15s
+    input_series:
+      - series: 'todo_items{job="fastapi", instance="fastapi-app:8000", state="overdue"}'
+        values: '12x80'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TodoOverdueBacklog
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              job: fastapi
+              instance: "fastapi-app:8000"
+              state: overdue
+            exp_annotations:
+              summary: "기한이 지난 미완료 항목이 10개를 넘음"
+
+  # 응답 시간 95번째 백분위가 1초를 넘으면 5분 뒤 알림 (요청의 대부분이 1~5초 구간)
+  - interval: 15s
+    input_series:
+      - series: 'http_request_duration_highr_seconds_bucket{le="0.5"}'
+        values: '0x60'
+      - series: 'http_request_duration_highr_seconds_bucket{le="1.0"}'
+        values: '0x60'
+      - series: 'http_request_duration_highr_seconds_bucket{le="5.0"}'
+        values: '0+10x60'
+      - series: 'http_request_duration_highr_seconds_bucket{le="+Inf"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HighLatencyP95
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: HighLatencyP95
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "응답 시간 95번째 백분위가 1초를 넘음"
+
+  # 응답이 모두 빠르면(0.5초 이내) 알림이 없다
+  - interval: 15s
+    input_series:
+      - series: 'http_request_duration_highr_seconds_bucket{le="0.5"}'
+        values: '0+10x60'
+      - series: 'http_request_duration_highr_seconds_bucket{le="1.0"}'
+        values: '0+10x60'
+      - series: 'http_request_duration_highr_seconds_bucket{le="5.0"}'
+        values: '0+10x60'
+      - series: 'http_request_duration_highr_seconds_bucket{le="+Inf"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: HighLatencyP95
+        exp_alerts: []
