@@ -1,9 +1,9 @@
 {
   "uid": "todo-app-v6",
-  "title": "To-Do 앱 관측 (v6)",
+  "title": "To-Do 앱 관측 (v7)",
   "tags": [
     "todo",
-    "v6"
+    "v7"
   ],
   "timezone": "browser",
   "schemaVersion": 39,
@@ -534,7 +534,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "오류율",
-      "description": "전체 요청 중 오류 비율. 오류가 없거나 요청이 없으면 0 으로 표시",
+      "description": "전체 요청 중 오류 비율. 오류가 없거나 조회가 없으면 0 으로 표시",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds}"
@@ -848,6 +848,112 @@
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "읽기 캐시 적중률",
+      "description": "목록 조회 중 파일을 다시 읽지 않고 메모리 결과를 쓴 비율 (v7 읽기 캐시). 조회가 없으면 0 으로 표시",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "(100 * sum(rate(todo_cache_total{result=\"hit\"}[$__rate_interval])) / (sum(rate(todo_cache_total[$__rate_interval])) > 0)) or vector(0)",
+          "legendFormat": "적중률",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "캐시 조회 (분당)",
+      "description": "hit: 캐시 사용, miss: 파일에서 다시 읽음. 쓰기는 캐시를 바로 갱신하므로 miss 는 앱 밖에서 파일이 바뀐 경우와 처음 한 번뿐",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "60 * sum by (result) (rate(todo_cache_total[$__rate_interval]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "opm",
           "custom": {
             "lineWidth": 2,
             "fillOpacity": 15,

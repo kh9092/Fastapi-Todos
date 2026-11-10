@@ -6,18 +6,18 @@ import re
 import threading
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, NamedTuple
  
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from prometheus_client import REGISTRY, Counter, Info
 from prometheus_client.core import GaugeMetricFamily
 from prometheus_client.registry import Collector
 from prometheus_fastapi_instrumentator import Instrumentator  # ← 추가
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, TypeAdapter, field_validator
  
-VERSION = "v6.0.0"
+VERSION = "v7.0.0"
 MAX_TODOS = 500                                  # [A04] 항목 수 상한: 무제한으로 쌓여 파일이 커지는 것을 막는다
 DATE_FORMAT = re.compile(r"\d{4}-\d{2}-\d{2}")   # fromisoformat 은 "20261231" 같은 다른 형식도 받아서 먼저 거른다
  
@@ -59,6 +59,9 @@ LIMIT_REJECTIONS = Counter("todo_limit_rejections", "항목 수 상한 때문에
 for _operation in ("create", "update", "delete"):
     OPERATIONS.labels(_operation)    # 처음부터 값 0 으로 존재시킨다: 첫 요청부터 rate() 에 잡힌다
 Info("todo_build", "빌드 정보").info({"version": VERSION})
+CACHE_RESULTS = Counter("todo_cache", "읽기 캐시 조회 결과 (hit: 캐시 사용, miss: 파일에서 다시 읽음)", ["result"])
+for _result in ("hit", "miss"):
+    CACHE_RESULTS.labels(_result)
  
 # 오류 응답을 API 문서에 명시한다 (HTTPException 이 던지는 상태 코드).
 # 정적 분석 도구가 읽을 수 있도록 ** 병합 없이 경로별로 리터럴 딕셔너리를 따로 두고,
@@ -130,12 +133,61 @@ def read_todos() -> list[TodoItem]:
     return [TodoItem(**t) for t in json.loads(raw)]
 
 
-def load_todos() -> list[TodoItem]:
+def load_from_disk() -> list[TodoItem]:         # 파일에서 읽고 검증한다 (캐시를 거치지 않음)
     try:
         return read_todos()
     except (ValueError, TypeError) as exc:       # JSON 손상, 형식 불일치 (둘 다 ValueError 계열)
         logger.exception("todo.json 을 읽지 못했습니다")      # [A09] 원인을 기록한다
         raise HTTPException(500, "저장된 데이터를 읽을 수 없습니다") from exc
+
+
+# [v7 성능] 읽기 캐시: 저장 파일이 바뀌지 않았으면 매 요청마다 파일을 읽고 항목을 검증하지 않고 메모리의 결과를 쓴다.
+# 파일이 바뀌었는지는 (경로, 수정 시각, 크기, inode) 로 판단하므로, 앱 밖에서 파일을 고쳐도 다음 요청에서 다시 읽는다.
+LIST_ADAPTER = TypeAdapter(list[TodoItem])
+
+
+class Snapshot(NamedTuple):
+    stamp: tuple | None                          # 이 결과를 만들 때의 파일 상태
+    todos: tuple                                 # 검증이 끝난 항목들 (tuple 이라 실수로 바꿀 수 없다)
+    payload: bytes                               # GET /todos 응답 본문 (미리 JSON 으로 만들어 둔 것)
+
+
+class StoreCache:
+    snapshot: Snapshot | None = None
+
+    def reset(self) -> None:
+        self.snapshot = None
+
+
+STORE_CACHE = StoreCache()
+
+
+def file_stamp() -> tuple | None:
+    try:
+        st = TODO_FILE.stat()
+    except OSError:                              # 파일이 없으면 상태도 없다 → 캐시를 쓰지 않는다
+        return None
+    return (str(TODO_FILE), st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def make_snapshot(stamp: tuple | None, todos: list[TodoItem]) -> Snapshot:
+    return Snapshot(stamp, tuple(todos), LIST_ADAPTER.dump_json(todos))
+
+
+def current_snapshot() -> Snapshot:
+    stamp = file_stamp()                         # 파일을 읽기 전에 먼저 확인한다: 읽는 도중 바뀌면 다음 요청에서 다시 읽게 된다
+    snapshot = STORE_CACHE.snapshot
+    if snapshot is not None and stamp is not None and snapshot.stamp == stamp:
+        CACHE_RESULTS.labels("hit").inc()
+        return snapshot
+    CACHE_RESULTS.labels("miss").inc()
+    snapshot = make_snapshot(stamp, load_from_disk())
+    STORE_CACHE.snapshot = snapshot
+    return snapshot
+
+
+def load_todos() -> list[TodoItem]:
+    return list(current_snapshot().todos)        # 복사본을 돌려준다: 호출한 쪽이 목록을 고쳐도 캐시는 그대로
  
  
 def save_todos(todos: list[TodoItem]) -> None:
@@ -143,6 +195,7 @@ def save_todos(todos: list[TodoItem]) -> None:
     tmp = TODO_FILE.with_name(TODO_FILE.name + ".tmp")
     tmp.write_text(data, encoding="utf-8")
     os.replace(tmp, TODO_FILE)                   # [A04] 임시 파일에 쓴 뒤 교체: 쓰다가 끊겨도 원본이 깨지지 않는다
+    STORE_CACHE.snapshot = make_snapshot(file_stamp(), todos)     # [v7] 방금 저장한 내용을 캐시에 바로 반영한다
  
  
 def find_index(todos: list[TodoItem], todo_id: int) -> int:
@@ -208,9 +261,10 @@ async def add_security_headers(request: Request, call_next):
     return response
  
  
-@app.get("/todos", dependencies=AUTH, responses=RESPONSES_READ)               # 목록 조회
-def get_todos() -> list[TodoItem]:
-    return load_todos()
+@app.get("/todos", dependencies=AUTH, responses=RESPONSES_READ,
+         response_model=list[TodoItem])                                        # 목록 조회: 캐시해 둔 JSON 을 그대로 돌려준다
+def get_todos() -> Response:
+    return Response(content=current_snapshot().payload, media_type="application/json")
  
  
 @app.post("/todos", status_code=201, dependencies=AUTH,

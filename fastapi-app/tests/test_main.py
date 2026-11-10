@@ -18,6 +18,7 @@ def setup_and_teardown(tmp_path, monkeypatch):
     # TODO_FILE 은 본인 main.py의 파일 경로 변수명에 맞게 수정 (Path 객체 그대로 넘김, str()로 감싸지 않음)
     monkeypatch.setattr(main, "TODO_FILE", tmp_path / "todo.json")
     monkeypatch.delenv("TODO_API_KEY", raising=False)   # 테스트는 기본적으로 인증 없이 시작한다
+    main.STORE_CACHE.reset()                        # [v7] 앞 테스트의 캐시가 남지 않게 비운다
     save_todos([])  # 테스트 전 초기화 (정리는 tmp_path 와 monkeypatch 가 자동으로 원상 복구)
 
 def test_get_todos_empty():
@@ -411,3 +412,107 @@ def test_limit_rejections_are_counted(monkeypatch):
     assert client.post("/todos", json={"title": "2"}).status_code == 409
     assert sample("todo_limit_rejections_total") == rejections + 1
     assert sample("todo_operations_total", {"operation": "create"}) == creates + 1
+
+
+# ---------- v7.0.0 읽기 캐시 ----------
+
+def cache_counts():
+    return sample("todo_cache_total", {"result": "hit"}), sample("todo_cache_total", {"result": "miss"})
+
+
+def test_cache_counters_exist_before_any_read():
+    for result in ("hit", "miss"):
+        assert sample("todo_cache_total", {"result": result}) is not None, result
+
+def test_second_read_is_served_from_cache():
+    main.STORE_CACHE.reset()
+    hit0, miss0 = cache_counts()
+    client.get("/todos")
+    client.get("/todos")
+    hit1, miss1 = cache_counts()
+    assert miss1 == miss0 + 1       # 처음 한 번만 파일을 읽는다
+    assert hit1 == hit0 + 1
+
+def test_write_refreshes_cache_so_next_read_is_a_hit():
+    client.post("/todos", json={"title": "a"})
+    hit0, miss0 = cache_counts()
+    body = client.get("/todos").json()
+    hit1, miss1 = cache_counts()
+    assert [t["title"] for t in body] == ["a"]     # 새 내용이 보인다
+    assert hit1 == hit0 + 1                        # 그런데도 파일을 다시 읽지 않았다
+    assert miss1 == miss0
+
+def test_update_and_delete_are_visible_through_cache():
+    todo_id = client.post("/todos", json={"title": "before"}).json()["id"]
+    client.put(f"/todos/{todo_id}", json={"title": "after"})
+    assert client.get("/todos").json()[0]["title"] == "after"
+    client.delete(f"/todos/{todo_id}")
+    assert client.get("/todos").json() == []
+
+def test_external_edit_invalidates_cache():
+    client.get("/todos")                           # 빈 목록이 캐시에 있다
+    main.TODO_FILE.write_text(json.dumps([{"id": 7, "title": "edited outside"}]), encoding="utf-8")
+    hit0, miss0 = cache_counts()
+    body = client.get("/todos").json()
+    hit1, miss1 = cache_counts()
+    assert body[0]["id"] == 7                      # 앱 밖에서 고친 내용이 보인다
+    assert miss1 == miss0 + 1
+
+def test_cache_is_tied_to_the_file_path(tmp_path, monkeypatch):
+    save_todos([TodoItem(id=1, title="a")])
+    other = tmp_path / "other.json"
+    other.write_text(main.TODO_FILE.read_text(encoding="utf-8"), encoding="utf-8")   # 내용이 같은 다른 파일
+    monkeypatch.setattr(main, "TODO_FILE", other)
+    hit0, miss0 = cache_counts()
+    client.get("/todos")
+    hit1, miss1 = cache_counts()
+    assert miss1 == miss0 + 1                      # 경로가 다르면 내용이 같아도 캐시를 쓰지 않는다
+    assert hit1 == hit0
+
+def test_corrupted_file_after_cache_returns_500_then_recovers():
+    save_todos([TodoItem(id=1, title="a")])
+    assert client.get("/todos").status_code == 200
+    main.TODO_FILE.write_text("{ 깨진 json", encoding="utf-8")
+    assert client.get("/todos").status_code == 500          # 캐시가 있어도 손상을 숨기지 않는다
+    save_todos([TodoItem(id=1, title="a")])
+    assert client.get("/todos").status_code == 200
+
+def test_missing_file_reads_as_empty_list_and_is_not_cached():
+    main.TODO_FILE.unlink()
+    hit0, miss0 = cache_counts()
+    assert client.get("/todos").json() == []
+    assert client.get("/todos").json() == []
+    hit1, miss1 = cache_counts()
+    assert miss1 == miss0 + 2                      # 파일이 없으면 캐시를 쓰지 않고 매번 확인한다
+    assert hit1 == hit0
+
+def test_cached_payload_matches_model_serialization():
+    items = [TodoItem(id=i, title=f"항목 {i}", priority="high", due_date="2030-01-01") for i in range(1, 4)]
+    save_todos(items)
+    assert client.get("/todos").json() == [i.model_dump() for i in items]
+
+def test_list_response_keeps_json_headers():
+    response = client.get("/todos")
+    assert response.headers["content-type"] == "application/json"
+    assert response.headers["cache-control"] == "no-store"
+
+def test_load_todos_returns_a_copy():
+    save_todos([TodoItem(id=1, title="a")])
+    first = load_todos()
+    first.append(TodoItem(id=2, title="added only in memory"))
+    assert len(load_todos()) == 1                  # 호출한 쪽이 목록을 고쳐도 캐시는 그대로
+
+def test_reads_stay_consistent_during_concurrent_writes():
+    def add(i):
+        return client.post("/todos", json={"title": f"t{i}"}).status_code
+    def read(_):
+        return client.get("/todos").status_code
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        posts = [pool.submit(add, i) for i in range(20)]
+        reads = [pool.submit(read, i) for i in range(40)]
+        post_codes = [f.result() for f in posts]
+        read_codes = [f.result() for f in reads]
+    assert set(post_codes) == {201}
+    assert set(read_codes) == {200}
+    assert len(client.get("/todos").json()) == 20  # 읽기 결과가 파일과 같다
+    assert len(load_todos()) == 20

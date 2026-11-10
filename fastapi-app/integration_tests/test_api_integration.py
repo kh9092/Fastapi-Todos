@@ -152,3 +152,21 @@ def test_business_metrics_exposed():
         body = res.read().decode("utf-8")
     assert "todo_store_readable 1.0" in body
     assert "todo_items{" in body
+
+
+# ---------- v7.0.0: 읽기 캐시 ----------
+
+def test_cache_metrics_exposed_and_reads_are_consistent():
+    """배포된 서버에서 추가한 항목이 목록에 바로 보이고, 캐시 지표가 노출되는지 확인한다"""
+    status, created = call("POST", "/todos", {"title": f"cache-{uuid.uuid4().hex[:8]}", "description": "v7"})
+    assert status == 201
+    todo_id = created["id"]
+    try:
+        status, listed = call("GET", "/todos")
+        assert status == 200
+        assert any(t["id"] == todo_id for t in listed)          # 쓰기 직후 읽기에 바로 보인다
+    finally:
+        call("DELETE", f"/todos/{todo_id}")
+    with urllib.request.urlopen(BASE_URL + "/metrics", timeout=10) as res:
+        body = res.read().decode("utf-8")
+    assert 'todo_cache_total{result="hit"}' in body
