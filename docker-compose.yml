@@ -1,3 +1,4 @@
+# 최상단 version 키는 Compose Spec 에서 폐기되었습니다 (Compose V2 에서 경고 발생) → 삭제
 services:
   fastapi-app:
     build:
@@ -5,15 +6,45 @@ services:
       dockerfile: Dockerfile      # Dockerfile 이름 (생략 가능, 기본값은 'Dockerfile')
     container_name: FastApi-app
     ports:
-      - "5001:8000"
+      - "5001:8000"               # 예시의 5002 대신 지금 쓰는 5001 유지 (기존 접속 주소가 바뀌지 않게)
+
+  jmeter:
+    build:
+      context: ./jmeter
+      dockerfile: Dockerfile
+    container_name: jmeter
+    # 평소 `docker compose up` (Jenkins 배포 포함) 에는 빠지고, 부하 테스트를 할 때만 실행된다:
+    #   docker compose --profile loadtest run --rm jmeter
+    profiles: ["loadtest"]
+    # 이미지의 사용자는 uid 1000 이다. bind mount(./jmeter) 에 결과 파일을 쓰려면 서버 계정의 uid 와 같아야 한다.
+    # 서버 계정의 uid 가 1000 이 아니면 .env 에 JMETER_UID / JMETER_GID 를 적는다 (기본값 1000).
+    user: "${JMETER_UID:-1000}:${JMETER_GID:-1000}"
+    volumes:
+      - ./jmeter:/jmeter
+    command:
+      - jmeter
+      - -n
+      - -t
+      - /jmeter/fastapi_test_plan.jmx
+      - -l
+      - /jmeter/results.jtl
+      - -JTARGET_HOST=fastapi-app
+      - -JTARGET_PORT=8000
+      - -Jjmeter.save.saveservice.output_format=csv
+      - -e
+      - -o
+      - /jmeter/report
 
   sonarqube:
+    # 지금 운영 중인 버전을 유지한다. 예시의 26.10 으로 올리면 내장 DB 의 분석 이력이 보존되지 않을 수 있다.
     image: sonarqube:26.9.0.129388-community
     container_name: sonarqube
     read_only: true                             # 컨테이너 파일시스템 읽기 전용 (아래 볼륨과 /tmp만 쓰기 가능)
     ports:
+      # 예시의 127.0.0.1 바인딩은 Jenkins 가 접속하는 주소(163.239.77.87:9000)와 PC 브라우저 접속을 막으므로 유지
       - "9000:9000"
     environment:
+      # 학습 환경 편의용입니다. 운영에서는 호스트의 vm.max_map_count 를 올리고 이 옵션은 끌 것
       - SONAR_ES_BOOTSTRAP_CHECKS_DISABLE=true
     volumes:
       - sonarqube_data:/opt/sonarqube/data
@@ -23,61 +54,75 @@ services:
     tmpfs:
       - /tmp
 
-  prometheus:                                   # ← #7 추가
-    image: prom/prometheus:v3.15.0              # latest 대신 버전 고정
+  prometheus:
+    image: prom/prometheus:v3.15.0
     container_name: prometheus
     read_only: true                             # 컨테이너 파일시스템 읽기 전용 (데이터 볼륨만 쓰기 가능)
     security_opt:
       - no-new-privileges:true                  # 컨테이너 안에서 권한 상승 차단
     cap_drop:
       - ALL                                     # 불필요한 커널 권한 모두 제거
-    ports:
-      - "127.0.0.1:7070:9090"                   # 서버 자신에게만 공개 (Prometheus는 로그인 기능이 없음)
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
     volumes:
-      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro   # 설정 파일은 읽기 전용(:ro)
-      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro           # ← 추가
+      # 설정 파일은 읽기 전용으로 마운트
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - prometheus-data:/prometheus             # 수집한 메트릭 저장 (컨테이너를 다시 만들어도 유지)
+    ports:
+      - "127.0.0.1:7070:9090"   # 외부 노출 금지
 
-  grafana:                                      # ← #7 추가
-    image: grafana/grafana:13.2.4               # latest 대신 버전 고정 (2026-10-13 보안 패치 버전)
+  grafana:
+    image: grafana/grafana:13.2.4
     container_name: grafana
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
     ports:
+      # 예시의 127.0.0.1 바인딩은 PC 브라우저의 Grafana 접속(캡처)을 막으므로 유지.
+      # 접속을 서버 안으로만 제한하고 싶으면 "127.0.0.1:3000:3000" 으로 바꾸고 SSH 터널로 접속
       - "3000:3000"
     environment:
+      # 비밀번호는 git 에 올라가지 않는 .env 파일에 둡니다. (.gitignore 에 .env 추가 필수)
+      #   .env  예)  GRAFANA_ADMIN_PASSWORD=<직접 만든 긴 랜덤 문자열>
+      # 이 값은 Grafana 데이터가 처음 만들어질 때만 적용된다. 기본값을 비워 두어 .env 가 없어도 compose 가 실패하지 않는다.
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
       - GF_AUTH_BASIC_PASSWORD_POLICY=true      # 비밀번호 12자 이상 + 대·소문자·숫자·특수문자 필수
       - GF_ANALYTICS_CHECK_FOR_UPDATES=false
       - GF_ANALYTICS_CHECK_FOR_PLUGIN_UPDATES=false
       - GF_PLUGINS_PREINSTALL_AUTO_UPDATE=false
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro   # ← 추가
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro                         # ← 추가
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
 
-  node-exporter:                                # ← #7 추가
-    image: prom/node-exporter:v1.12.1           # latest 대신 버전 고정
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
     container_name: node-exporter
     read_only: true
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    # ports 없음: Prometheus가 내부 네트워크(node-exporter:9100)로 수집하므로 외부 공개 불필요
+    ports:
+      # node-exporter 는 인증이 전혀 없고 호스트의 CPU/메모리/네트워크/마운트 정보를 그대로 뱉습니다.
+      # 외부에 열어두면 정찰(recon) 과 증폭 공격의 표적이 됩니다. 반드시 루프백에만 바인딩
+      - "127.0.0.1:7100:9100"
 
+  # 예시에는 없지만 prometheus.yml 의 cadvisor 수집 대상과 Grafana 대시보드 패널이 이 서비스를 쓴다.
+  # 빠지면 --remove-orphans 로 컨테이너가 지워지고 TargetDown 알림이 울린다.
   cadvisor:
-    image: ghcr.io/google/cadvisor:v0.60.6   # latest 대신 버전 고정 (v0.53.0부터 ghcr.io)
+    image: ghcr.io/google/cadvisor:v0.60.6
     container_name: cadvisor
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
-    # ports 없음: Prometheus가 내부 네트워크(cadvisor:8080)로 수집하므로 외부 공개 불필요
-    volumes:                                  # 컨테이너 정보를 읽기 위해 호스트 경로를 읽기 전용으로 연결
+    # ports 없음: Prometheus 가 내부 네트워크(cadvisor:8080)로 수집
+    volumes:
       - /:/rootfs:ro
       - /var/run:/var/run:ro
       - /sys:/sys:ro
@@ -89,5 +134,5 @@ volumes:
   sonarqube_extensions:
   sonarqube_logs:
   sonarqube_temp:
-  prometheus-data:                              # ← #7 추가
-  grafana-data:                                 # ← #7 추가
+  prometheus-data:
+  grafana-data:
