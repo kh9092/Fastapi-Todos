@@ -128,6 +128,18 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
+  influxdb:
+    image: influxdb:1.8.10
+    container_name: influxdb
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - INFLUXDB_DB=jmeter                      # 처음 시작할 때 jmeter 데이터베이스를 자동으로 만든다
+      - INFLUXDB_REPORTING_DISABLED=true        # 사용 통계를 외부로 보내지 않는다
+    ports:
+      - "127.0.0.1:8086:8086"                   # 서버 안에서만 접근 (InfluxDB 1.x 는 기본이 인증 없음 → 외부 공개 금지)
+    volumes:
+      - influxdb-data:/var/lib/influxdb
 
 volumes:
   sonarqube_data:
@@ -136,3 +148,4 @@ volumes:
   sonarqube_temp:
   prometheus-data:
   grafana-data:
+  influxdb-data:
