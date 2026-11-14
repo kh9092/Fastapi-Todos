@@ -69,8 +69,8 @@ docker compose up -d                    # 전체 스택 (SonarQube, Prometheus, 
 
 
 ## 화면
+<img width="1225" height="752" alt="image" src="https://github.com/user-attachments/assets/c53fe49e-92a5-46c3-9321-a9424e5415c7" />
+<img width="1656" height="901" alt="image" src="https://github.com/user-attachments/assets/ba7c217d-5a97-4bdd-8135-71c9b8602814" />
+<img width="1680" height="902" alt="image" src="https://github.com/user-attachments/assets/b85f59c9-8aae-4ed6-afca-fd67d415907e" />
 
-<!-- 아래 이미지를 docs/images/ 에 넣고 주석을 해제하세요 -->
-<!-- ![앱 화면](docs/images/app.png) -->
-<!-- ![Grafana 대시보드](docs/images/grafana-dashboard.png) -->
-<!-- ![JMeter 리포트](docs/images/jmeter-report.png) -->
+
