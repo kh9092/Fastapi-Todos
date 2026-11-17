@@ -1,11 +1,11 @@
 """통합 테스트: 배포된 서버(BASE_URL)에 실제 HTTP 요청을 보내 API 흐름을 검증한다.
 
 실행 예:
-    BASE_URL=http://163.239.77.77:5053 python -m pytest integration_tests -v
+    BASE_URL=http://서버주소:포트 python -m pytest integration_tests -v
 
 BASE_URL 을 지정하지 않으면 로컬(http://localhost:8000)을 대상으로 한다.
 서버에 접근 키(TODO_API_KEY)를 설정했다면 API_KEY 환경변수에 같은 값을 넣어 실행한다:
-    API_KEY=키 BASE_URL=http://163.239.77.77:5053 python -m pytest integration_tests -v
+    API_KEY=키 BASE_URL=http://서버주소:포트 python -m pytest integration_tests -v
 requests 같은 추가 패키지 없이 파이썬 표준 라이브러리(urllib)만 사용한다.
 """
 import json

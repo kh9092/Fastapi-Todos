@@ -516,3 +516,63 @@ def test_reads_stay_consistent_during_concurrent_writes():
     assert set(read_codes) == {200}
     assert len(client.get("/todos").json()) == 20  # 읽기 결과가 파일과 같다
     assert len(load_todos()) == 20
+
+
+# ---------- v8.0.0 액세스 로그 (Loki) ----------
+
+LOG_PATH = "/todos"
+LOG_KEY = "s3cret"
+ACCESS_LINE = re.compile(r'^\S+ - "[A-Z]+ \S+ HTTP/1\.1" \d{3} \d+\.\d{3}s$')   # IP - "METHOD PATH HTTP/1.1" 상태 시간
+
+
+class ListHandler(logging.Handler):
+    """액세스 로거에 붙여서 찍힌 줄을 리스트에 모은다. (propagate=False 라 caplog 로는 잡히지 않는다)"""
+
+    def __init__(self):
+        super().__init__()
+        self.lines = []
+
+    def emit(self, record):
+        self.lines.append(record.getMessage())
+
+
+@pytest.fixture
+def access_lines():
+    handler = ListHandler()
+    main.custom_logger.addHandler(handler)
+    yield handler.lines
+    main.custom_logger.removeHandler(handler)
+
+
+def test_each_request_writes_one_access_log_line(access_lines):
+    client.get(LOG_PATH)
+    client.post(LOG_PATH, json={"title": "로그 확인"})
+    assert len(access_lines) == 2                   # 요청 한 건에 한 줄 (uvicorn 기본 로그와 겹치지 않는다)
+    assert all(ACCESS_LINE.match(line) for line in access_lines)
+    assert '"GET /todos HTTP/1.1" 200' in access_lines[0]
+    assert '"POST /todos HTTP/1.1" 201' in access_lines[1]
+
+
+def test_failed_requests_are_logged_with_their_status_code(monkeypatch, access_lines):
+    client.delete("/todos/99999")                   # 없는 항목: 404
+    monkeypatch.setenv("TODO_API_KEY", LOG_KEY)
+    client.get(LOG_PATH)                            # 키 없음: 401 (로그 미들웨어가 가장 바깥이라 인증 실패도 기록된다)
+    assert '"DELETE /todos/99999 HTTP/1.1" 404' in access_lines[0]
+    assert '"GET /todos HTTP/1.1" 401' in access_lines[1]
+
+
+def test_access_log_leaves_out_query_string_and_key(monkeypatch, access_lines):
+    monkeypatch.setenv("TODO_API_KEY", LOG_KEY)
+    client.get("/todos?token=abc123", headers={"X-API-Key": LOG_KEY})
+    line = access_lines[0]
+    assert "abc123" not in line                     # 쿼리 문자열은 기록하지 않는다 (경로만)
+    assert LOG_KEY not in line                     # 헤더의 키 값도 기록하지 않는다
+    assert '"GET /todos HTTP/1.1" 200' in line
+
+
+def test_access_log_is_configured_for_stdout_once():
+    assert main.custom_logger.propagate is False    # root 로거로 넘기지 않아 같은 줄이 두 번 찍히지 않는다
+    assert logging.getLogger("uvicorn.access").disabled is True
+    # pytest 가 기록용 핸들러(StreamHandler 의 하위 클래스)를 붙이므로, 앱이 붙인 것만 세려고 클래스를 정확히 비교한다
+    stdout_handlers = [h for h in main.custom_logger.handlers if type(h) is logging.StreamHandler]
+    assert len(stdout_handlers) == 1                # 핸들러가 겹쳐 쌓이지 않는다

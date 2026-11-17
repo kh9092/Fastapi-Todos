@@ -19,7 +19,7 @@ from prometheus_fastapi_instrumentator import Instrumentator  # ← 추가
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, TypeAdapter, field_validator
  
-VERSION = "v7.0.0"
+VERSION = "v8.0.0"
 MAX_TODOS = 500                                  # [A04] 항목 수 상한: 무제한으로 쌓여 파일이 커지는 것을 막는다
 DATE_FORMAT = re.compile(r"\d{4}-\d{2}-\d{2}")   # fromisoformat 은 "20261231" 같은 다른 형식도 받아서 먼저 거른다
  
