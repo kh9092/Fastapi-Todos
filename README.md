@@ -11,7 +11,7 @@
 | [v5.0.0](https://github.com/kh9092/Fastapi-Todos/releases/tag/v5.0.0) | 2026-10-10 | OWASP Top 10(2021) 점검 반영: API 키 인증, 입력 제한, 보안 헤더·CSP, 의존성 버전 고정, 감사 로그 |
 | [v6.0.0](https://github.com/kh9092/Fastapi-Todos/releases/tag/v6.0.0) | 2026-11-02 | 관측 가능성: 앱 고유 지표, 알림 규칙 7개, Grafana 대시보드를 코드로 관리 |
 | [v7.0.0](https://github.com/kh9092/Fastapi-Todos/releases/tag/v7.0.0) | 2026-11-10 | 부하 테스트로 찾은 병목을 읽기 캐시로 개선하고 다시 측정 |
-
+| [v8.0.0](https://github.com/kh9092/Fastapi-Todos/releases/tag/v8.0.0) | 배포한 날짜 | 로그 수집: 요청 로그를 Alloy가 읽어 Loki에 저장하고 Grafana에서 조회 |
 ## 구조
 
 ```
