@@ -1,5 +1,30 @@
 # 최상단 version 키는 Compose Spec 에서 폐기되었습니다 (Compose V2 에서 경고 발생) → 삭제
 services:
+  alloy:
+    image: grafana/alloy:v1.21.3
+    container_name: alloy
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports:
+      - "127.0.0.1:12345:12345"
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # 컨테이너 목록과 로그를 찾기 위해 도커 소켓을 읽는다. 소켓 접근은 호스트 권한에 가까워서 이 서비스는 외부에 공개하지 않는다.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    depends_on:
+      - loki
+  loki:
+    image: grafana/loki:3.7.9
+    container_name: loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - loki-data:/loki
   fastapi-app:
     build:
       context: ./fastapi-app      # Dockerfile이 위치한 디렉토리 경로
@@ -7,6 +32,8 @@ services:
     container_name: FastApi-app
     ports:
       - "5001:8000"               # 예시의 5002 대신 지금 쓰는 5001 유지 (기존 접속 주소가 바뀌지 않게)
+    environment:
+      - PYTHONUNBUFFERED=1        # 로그를 버퍼링 없이 바로 stdout으로 출력
 
   jmeter:
     build:
@@ -41,7 +68,7 @@ services:
     container_name: sonarqube
     read_only: true                             # 컨테이너 파일시스템 읽기 전용 (아래 볼륨과 /tmp만 쓰기 가능)
     ports:
-      # 예시의 127.0.0.1 바인딩은 Jenkins 가 접속하는 주소(163.239.77.87:9000)와 PC 브라우저 접속을 막으므로 유지
+      # 예시의 127.0.0.1 바인딩은 Jenkins 의 SonarQube 접속과 PC 브라우저 접속을 막으므로 유지
       - "9000:9000"
     environment:
       # 학습 환경 편의용입니다. 운영에서는 호스트의 vm.max_map_count 를 올리고 이 옵션은 끌 것
@@ -149,3 +176,5 @@ volumes:
   prometheus-data:
   grafana-data:
   influxdb-data:
+  loki-data:
+  alloy-data:
